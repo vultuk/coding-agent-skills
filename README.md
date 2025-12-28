@@ -8,9 +8,10 @@ A collection of custom skills for Claude Code that automate common development w
 
 Load a GitHub issue, create an isolated worktree, plan the implementation, and submit a PR.
 
-```
-/fix-github-issue 123
-```
+**Example prompts:**
+- "Fix issue #123"
+- "Implement GitHub issue 456"
+- "Work on issue #78"
 
 **Workflow:**
 1. Creates isolated git worktree for the issue
@@ -23,9 +24,11 @@ Load a GitHub issue, create an isolated worktree, plan the implementation, and s
 
 Process all PR feedback in one pass - review comments and CI failures together.
 
-```
-/pr-feedback-workflow
-```
+**Example prompts:**
+- "Address the PR feedback"
+- "Fix the review comments"
+- "Handle the CI failures on this PR"
+- "Process the PR reviews"
 
 **Workflow:**
 1. Gathers all review comments and CI failure logs
@@ -38,9 +41,10 @@ Process all PR feedback in one pass - review comments and CI failures together.
 
 Clean up after an issue PR is merged.
 
-```
-/cleanup-issue 123
-```
+**Example prompts:**
+- "Clean up issue #123"
+- "Finish up the issue"
+- "The PR was approved, clean up"
 
 **Workflow:**
 1. Merges PR if approved but not yet merged
@@ -53,9 +57,11 @@ Clean up after an issue PR is merged.
 
 Perform comprehensive code audits and generate structured reports.
 
-```
-/code-audit
-```
+**Example prompts:**
+- "Audit this codebase"
+- "Review the code quality"
+- "Check for security issues"
+- "Generate a code audit report"
 
 **Analysis categories:**
 - Architecture and component structure
@@ -70,9 +76,11 @@ Perform comprehensive code audits and generate structured reports.
 
 Systematic identification of race conditions and concurrency bugs.
 
-```
-/race-condition-audit
-```
+**Example prompts:**
+- "Find race conditions in this code"
+- "Audit the concurrent code"
+- "Check for thread safety issues"
+- "Look for data races"
 
 **Supports:** TypeScript, JavaScript, Python, Go, Rust, C++
 
