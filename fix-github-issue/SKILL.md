@@ -1,11 +1,23 @@
 ---
 name: fix-github-issue
 description: Load a GitHub issue, create an isolated worktree, plan the implementation, and submit a PR. Use when asked to fix, implement, or work on a GitHub issue by number. Requires the gh CLI to be authenticated.
+triggers:
+  - "fix issue #"
+  - "implement issue"
+  - "work on issue"
+  - "resolve issue"
+prerequisites:
+  - gh (GitHub CLI, authenticated)
+  - git
+arguments:
+  - name: ISSUE_NUMBER
+    required: true
+    description: The GitHub issue number to work on
 ---
 
 # Fix GitHub Issue
 
-Plan, implement, and submit a PR for a GitHub issue using git worktrees.
+Plan, implement, and submit a PR for a GitHub issue using git worktrees for isolation.
 
 ## Phase 1: Plan
 
@@ -18,14 +30,25 @@ scripts/setup-worktree.sh $ISSUE_NUMBER
 ```
 
 This will:
+- Validate prerequisites (gh auth, git repo, origin remote)
 - Checkout main and pull latest changes
 - Create a new worktree at `.worktrees/issue-$ISSUE_NUMBER`
 - Create and checkout a branch `issue-$ISSUE_NUMBER`
-- Change into the worktree directory
+- Output the path to cd into
 
 All subsequent work happens in the worktree, keeping your main repo clean.
 
+**Options:**
+- `--no-worktree`: Work directly on a branch without creating a worktree (useful for simple changes)
+
 **Note:** The script auto-adds `.worktrees/` to `.gitignore`.
+
+**If setup fails:**
+- "Not in a git repository": Run from within a git repo
+- "gh not authenticated": Run `gh auth login`
+- "No origin remote": Add one with `git remote add origin <url>`
+- "Uncommitted changes": Commit or stash your changes first
+- "Could not fast-forward": Your local main has diverged; resolve manually
 
 ### 2. Load issue context
 
@@ -52,7 +75,51 @@ Analyse the issue and produce a plan using [templates/plan.md](templates/plan.md
 - Summary, root cause analysis, implementation steps
 - Testing approach, risks, complexity assessment
 
-### 5. Confirm before implementing
+**Example plan output:**
+
+```markdown
+# Plan: Fix null pointer in user service
+
+**Issue:** #123 - https://github.com/org/repo/issues/123
+
+## Summary
+User service crashes when processing requests with missing optional fields.
+
+## Analysis
+The `processUser` function at `src/services/user.ts:45` accesses `user.profile.name`
+without checking if `profile` exists. This was introduced in commit abc123.
+
+## Implementation Plan
+1. Add null check for `user.profile` in `processUser`
+2. Add fallback default values for optional fields
+3. Add unit test for the null case
+
+## Testing/Validation
+- [ ] Unit test: processUser with null profile
+- [ ] Unit test: processUser with partial profile
+- [ ] Integration test: API endpoint with minimal payload
+
+## Risks/Edge Cases
+- Other callers may rely on the exception being thrown
+- Profile field is used in 3 other places (checked: all safe)
+
+## Complexity
+**Low** - Single file change with clear fix
+```
+
+### 5. Handling complex issues
+
+**Issues with dependencies:**
+- Check if blocking issues are resolved
+- Note dependencies in your plan
+- Consider implementing in phases
+
+**Issues with multiple related issues:**
+- Reference related issues in the plan
+- Coordinate if changes overlap
+- Consider whether to batch or separate PRs
+
+### 6. Confirm before implementing
 
 Ask: "Would you like me to start working on this now?"
 
@@ -63,6 +130,8 @@ Wait for confirmation.
 ## Phase 2: Implement
 
 Write the code changes as planned. Test locally.
+
+Follow the repository's coding standards and conventions.
 
 ---
 
@@ -114,3 +183,8 @@ Confirm the PR shows `Closes #N` and the issue appears in the Development sideba
 | `scripts/setup-worktree.sh` | Pulls main, creates worktree and branch |
 | `scripts/load-issue.sh` | Fetches issue details, comments, and related PRs |
 | `scripts/create-pr.sh` | Commits, pushes, and opens PR |
+
+## Related Skills
+
+- [cleanup-issue](../cleanup-issue/SKILL.md): Clean up after PR is merged
+- [pr-feedback-workflow](../pr-feedback-workflow/SKILL.md): Address review comments on the PR
