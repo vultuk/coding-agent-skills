@@ -163,7 +163,18 @@ Automatically select the issue with highest combined score. Output prioritizatio
 
 ## Phase 2: Setup and Planning
 
-### 2.1 Create Worktree
+### 2.1 Sync with Remote
+
+Pull the latest changes before starting any work:
+
+```bash
+git fetch origin
+git pull --rebase origin main
+```
+
+This ensures we're working with the latest codebase and avoids merge conflicts later.
+
+### 2.2 Create Worktree
 
 Use the existing worktree setup script:
 
@@ -173,7 +184,7 @@ Use the existing worktree setup script:
 
 This creates an isolated worktree at `.worktrees/issue-$ISSUE_NUMBER`.
 
-### 2.2 Mark Issue In Progress
+### 2.3 Mark Issue In Progress
 
 Add a label to indicate work has started:
 
@@ -183,13 +194,13 @@ gh issue edit $ISSUE_NUMBER --add-label "auto-fixing"
 
 This prevents other runs from picking up the same issue and signals to humans that automated work is underway.
 
-### 2.3 Load Issue Context
+### 2.4 Load Issue Context
 
 ```bash
 ../fix-github-issue/scripts/load-issue.sh $ISSUE_NUMBER
 ```
 
-### 2.4 Create TDD Plan
+### 2.5 Create TDD Plan
 
 Launch Explore subagent to create a TDD-specific implementation plan:
 
