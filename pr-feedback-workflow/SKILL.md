@@ -223,6 +223,123 @@ All feedback has been addressed."
 | `scripts/load-pr-feedback.sh` | Fetches PR comments, threads, and CI status |
 | `scripts/resolve-thread.sh` | Resolves a review thread by ID |
 
+## Subagent Usage
+
+Use subagents to parallelize data gathering and offload reply posting.
+
+### Phase 1: Parallel Data Gathering
+
+For PRs with significant feedback, launch 3 agents in parallel to gather all data sources simultaneously:
+
+```
+Launch parallel agents:
+
+1. Review Comments Agent (general-purpose):
+   "Fetch all code review comments for PR #{number} in {owner}/{repo}.
+   Use GraphQL to get review threads with pagination.
+   For each comment, capture:
+   - Thread ID (for resolution)
+   - Comment ID (for replies)
+   - File path and line number
+   - Author
+   - Body text
+   - Resolution status
+   Return: Structured list of all review threads and comments"
+
+2. CI Failures Agent (general-purpose):
+   "Fetch CI/CD status for PR #{number} in {owner}/{repo}.
+   Steps:
+   1. Run: gh pr checks {number}
+   2. For failed checks, get run IDs: gh run list --branch {branch}
+   3. For each failed run, get logs: gh run view {run_id} --log-failed
+   4. Extract error messages and affected files
+   Return: List of failures with error messages, affected files, and suggested fixes"
+
+3. Conversation Agent (general-purpose):
+   "Fetch PR conversation comments for PR #{number} in {owner}/{repo}.
+   Use: gh api repos/{owner}/{repo}/issues/{number}/comments
+   Handle pagination for large discussions.
+   For each comment, capture:
+   - Comment ID
+   - Author
+   - Body text
+   - Created date
+   Return: Chronological list of conversation comments"
+```
+
+**Benefits:**
+- Data gathering 3x faster (concurrent API calls)
+- API rate limits spread across parallel requests
+- Main context receives only structured summaries
+
+### Phase 4: Background Reply Posting
+
+After applying code fixes, offload reply posting to background:
+
+```
+Launch background agent:
+"Post replies to PR #{number} review comments.
+Replies to post:
+[List of {comment_id, reply_text, comment_type}]
+
+For each reply:
+1. If code review comment:
+   gh api repos/{owner}/{repo}/pulls/comments/{id}/replies -f body='...'
+2. If conversation comment:
+   gh pr comment {number} -b '...'
+3. Log success/failure for each
+
+Return: Summary of posted replies with any failures"
+```
+
+```
+Launch background agent:
+"Resolve addressed review threads for PR #{number}.
+Threads to resolve:
+[List of thread IDs]
+
+For each thread:
+1. Run scripts/resolve-thread.sh {thread_id}
+2. Log success/failure
+
+Return: Summary of resolved threads"
+```
+
+Main context can continue working (e.g., creating follow-up issues) while replies post.
+
+**When to use subagents:**
+- PR has > 10 review comments: Use parallel data gathering
+- > 5 replies to post: Use background reply agent
+- CI has multiple failed workflows: Use dedicated CI agent
+
+**When to skip subagents:**
+- Small PR with < 5 comments total
+- Single CI failure to address
+- Quick turnaround needed (subagent overhead not worth it)
+
+### Handling Agent Results
+
+After parallel agents complete, synthesize in main context:
+
+```markdown
+## Feedback Summary
+
+### From Review Comments Agent:
+- X unresolved threads across Y files
+- Key themes: [categorize by type]
+
+### From CI Agent:
+- Z failed workflows
+- Common failures: [test name, lint errors, etc.]
+
+### From Conversation Agent:
+- N general comments
+- Unanswered questions: [list]
+
+### Overlaps
+- Comment about X and CI failure Y both fixed by: [change]
+```
+
 ## Related Skills
 
 - [fix-github-issue](../fix-github-issue/SKILL.md): The workflow that creates the PR

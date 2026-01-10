@@ -190,6 +190,154 @@ grep -rn "synchronized" --include="*.java"
 grep -rn "var.*=.*mutableListOf\|var.*=.*mutableMapOf" --include="*.kt"
 ```
 
+## Subagent Usage
+
+Use subagents to parallelize analysis across languages and anti-pattern categories.
+
+### Step 1: Parallel Language Analysis
+
+For multi-language codebases, launch Explore agents in parallel for each language:
+
+```
+Launch parallel Explore agents:
+
+1. TypeScript/JavaScript Agent:
+   "Audit TypeScript/JavaScript code for race conditions.
+   Search for:
+   - async/await patterns without proper synchronization
+   - Promise.all with shared state modifications
+   - Missing await statements
+   - Event handler races
+   - Worker thread shared memory issues
+
+   Load patterns from references/typescript-javascript.md
+   Return: List of findings with file:line, category, and severity"
+
+2. Python Agent:
+   "Audit Python code for race conditions.
+   Search for:
+   - threading.Thread without proper locks
+   - asyncio races (shared state in coroutines)
+   - GIL misconceptions (I/O bound races still exist)
+   - multiprocessing shared memory issues
+
+   Load patterns from references/python.md
+   Return: List of findings with file:line, category, and severity"
+
+3. Go Agent:
+   "Audit Go code for race conditions.
+   Search for:
+   - goroutines accessing shared variables
+   - channel misuse (send after close, range on closed)
+   - map concurrent access
+   - sync.WaitGroup races
+
+   Load patterns from references/go.md
+   Run: go test -race ./... if tests exist
+   Return: List of findings with file:line, category, and severity"
+
+4. Rust Agent:
+   "Audit Rust code for race conditions.
+   Search for:
+   - unsafe blocks with shared mutable state
+   - Arc<Mutex<T>> deadlock potential
+   - async race conditions
+   - interior mutability misuse
+
+   Load patterns from references/rust.md
+   Return: List of findings with file:line, category, and severity"
+```
+
+**Benefits:**
+- Multi-language codebases analyzed concurrently
+- Each agent has full context of language-specific patterns
+- Main context receives synthesized findings only
+
+### Step 4: Parallel Anti-Pattern Detection
+
+For thorough audits, launch parallel agents for each critical anti-pattern:
+
+```
+Launch parallel Explore agents:
+
+1. Check-Then-Act Agent:
+   "Find check-then-act race conditions across the codebase.
+   Pattern: if (condition) { use(value) } where value can change
+   Look for:
+   - File existence checks before read/write
+   - Map key checks before access
+   - Null checks with delayed use
+   - Permission checks before action
+   Return: Findings with code snippets and race scenarios"
+
+2. Read-Modify-Write Agent:
+   "Find non-atomic read-modify-write operations.
+   Pattern: value = value + 1 without synchronization
+   Look for:
+   - counter++, counter += 1
+   - x = x.concat(...), x = [...x, item]
+   - Non-atomic balance updates
+   - Cache invalidation races
+   Return: Findings with code snippets and race scenarios"
+
+3. Deadlock Agent:
+   "Find potential deadlock scenarios.
+   Look for:
+   - Inconsistent lock ordering (A then B vs B then A)
+   - Lock held across await/async boundaries
+   - Nested synchronized blocks
+   - Resource acquisition cycles
+   Return: Findings with lock ordering diagrams"
+
+4. Collection Mutation Agent:
+   "Find concurrent collection access issues.
+   Look for:
+   - Iterating while modifying same collection
+   - Concurrent map/set access without synchronization
+   - Array modifications during forEach/map
+   - Shared queue access patterns
+   Return: Findings with code snippets and race scenarios"
+```
+
+**Benefits:**
+- Thorough coverage of each anti-pattern category
+- Specialized search patterns for each category
+- Parallel execution on large codebases
+
+### Synthesizing Results
+
+After parallel agents complete, main context synthesizes:
+
+```markdown
+## Race Condition Audit Summary
+
+### By Severity
+- Critical: X findings
+- High: Y findings
+- Medium: Z findings
+
+### By Category
+| Category | Count | Most Affected Files |
+|----------|-------|---------------------|
+| Check-Then-Act | N | file1.ts, file2.py |
+| Read-Modify-Write | N | file3.go, file4.rs |
+| Deadlock | N | file5.java |
+
+### Top Priority Fixes
+1. [RC-001] Critical: [title] at file:line
+2. [RC-002] Critical: [title] at file:line
+```
+
+**When to use subagents:**
+- Multi-language codebase (> 1 language): Use parallel language agents
+- Large codebase (> 10k LOC): Use parallel anti-pattern agents
+- Comprehensive audit requested: Use both
+
+**When to skip subagents:**
+- Single-language, small codebase
+- Focused audit on specific file or module
+- Quick sanity check (use quick detection commands instead)
+
 ## Related Skills
 
 - [code-audit](../code-audit/SKILL.md): General code audit (includes race condition checks)

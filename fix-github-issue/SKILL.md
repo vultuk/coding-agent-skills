@@ -184,6 +184,102 @@ Confirm the PR shows `Closes #N` and the issue appears in the Development sideba
 | `scripts/load-issue.sh` | Fetches issue details, comments, and related PRs |
 | `scripts/create-pr.sh` | Commits, pushes, and opens PR |
 
+## Subagent Usage
+
+Use subagents to offload codebase exploration from the main context.
+
+### Phase 1: Explore Agent for Codebase Analysis
+
+After loading issue context, launch an Explore agent to find relevant files without bloating main context:
+
+```
+Launch Explore agent:
+"Find all files related to issue #{number}: {issue_title}
+
+Issue description:
+{issue_body}
+
+Search for:
+1. Files explicitly mentioned in the issue
+2. Files matching keywords from the issue title and body
+3. Similar existing implementations (if this is a new feature)
+4. Test files that cover the affected areas
+5. Configuration files that might need updates
+6. Related type definitions or interfaces
+
+For each relevant file found:
+- Explain why it's relevant
+- Note the key functions/classes to modify
+- Identify integration points with other code
+
+Return:
+- List of affected files with explanations
+- Existing patterns to follow
+- Test files to update or add
+- Potential side effects to consider"
+```
+
+**Benefits:**
+- Codebase exploration stays out of main context
+- Agent can do thorough search without token pressure
+- Main context receives concise summary of findings
+
+### Phase 1: Plan Agent for Implementation Design
+
+After exploration, optionally launch a Plan agent for complex issues:
+
+```
+Launch Plan agent:
+"Design implementation for issue #{number}: {issue_title}
+
+Context from exploration:
+{exploration_results}
+
+Issue requirements:
+{issue_body}
+
+Create a detailed implementation plan covering:
+1. Root cause analysis (for bugs) or feature breakdown (for features)
+2. Step-by-step implementation order
+3. Testing approach
+4. Risks and edge cases
+5. Complexity assessment"
+```
+
+**When to use Plan agent:**
+- Complex issues requiring architectural decisions
+- Issues touching > 5 files
+- Features with multiple valid approaches
+
+### Phase 3: Background PR Creation (Optional)
+
+For straightforward PRs, create in background while reporting to user:
+
+```
+Launch background agent:
+"Create PR for issue #{number}.
+Branch: {branch_name}
+Title: {pr_title}
+Body: {pr_body}
+
+Steps:
+1. git push -u origin HEAD
+2. gh pr create --title '...' --body '...'
+3. Return PR URL"
+```
+
+User sees immediate confirmation while PR creates in background.
+
+**When to use subagents:**
+- Issue mentions multiple files or areas: Use Explore agent
+- Complex architectural issue: Use Plan agent
+- User wants quick feedback: Use background PR creation
+
+**When to skip subagents:**
+- Issue clearly specifies exact file and change needed
+- Single-line fix or typo correction
+- You already know the codebase well from context
+
 ## Related Skills
 
 - [cleanup-issue](../cleanup-issue/SKILL.md): Clean up after PR is merged

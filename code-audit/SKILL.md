@@ -181,6 +181,87 @@ Create separate audit reports when:
 
 Confirm all issue URLs with the user after creation.
 
+## Subagent Usage
+
+Use subagents to parallelize analysis and reduce main context bloat.
+
+### Phase 2: Parallel Analysis
+
+For medium to large codebases, launch up to 4 Explore agents in parallel to analyze different categories simultaneously:
+
+```
+Launch parallel Explore agents:
+
+1. Architecture Agent:
+   "Analyze the codebase architecture. Look for:
+   - Separation of concerns violations
+   - Circular dependencies
+   - Component structure issues
+   - Coupling problems between modules
+   Return: List of findings with file:line references and severity"
+
+2. Security Agent:
+   "Perform security analysis. Scan for:
+   - Input validation gaps (SQL injection, XSS, command injection)
+   - Credential handling issues (hardcoded secrets, improper storage)
+   - Authentication/authorization flaws
+   - OWASP Top 10 vulnerabilities
+   Return: List of findings with file:line references and severity"
+
+3. Performance Agent:
+   "Analyze performance issues. Find:
+   - O(n²) or worse algorithms
+   - Unnecessary object copies or allocations
+   - N+1 query patterns
+   - Missing caching opportunities
+   - Inefficient data structures
+   Return: List of findings with file:line references and severity"
+
+4. Code Quality Agent:
+   "Check code quality and best practices. Look for:
+   - SOLID principle violations (god classes, tight coupling)
+   - DRY violations (duplicated logic, copy-paste code)
+   - Magic numbers and missing documentation
+   - Broad exception handling
+   - Resource leaks
+   Return: List of findings with file:line references and severity"
+```
+
+Each agent returns structured findings. Main context synthesizes into final report.
+
+**Benefits:**
+- 4x faster analysis on large codebases
+- Exploration output stays in subagent context (reduces token usage)
+- Main context receives only synthesized findings
+
+### Phase 5: Background Issue Creation
+
+After generating the report, create GitHub issues in background:
+
+```
+Launch background agent:
+"Create GitHub issues for each audit finding using scripts/create_issue.sh.
+Findings to create:
+[List of findings with titles, labels, and bodies]
+
+For each finding:
+1. Create issue with appropriate labels (priority:X, category)
+2. Capture the issue URL
+3. Return all created issue URLs when complete"
+```
+
+Main context can continue summarizing results while issues are created.
+
+**When to use subagents:**
+- Codebase > 5,000 LOC: Use parallel analysis agents
+- More than 5 issues to create: Use background issue creation
+- Time-sensitive audit: Always use parallel agents
+
+**When to skip subagents:**
+- Single file audit
+- Focused audit on specific concern (one category only)
+- Small codebase < 1,000 LOC
+
 ## Related Skills
 
 - [race-condition-audit](../race-condition-audit/SKILL.md): Deep-dive on concurrency issues

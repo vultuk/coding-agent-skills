@@ -95,6 +95,32 @@ Perform comprehensive code audits and generate structured reports.
 
 **Output:** Markdown report with severity-prioritised recommendations and optional GitHub issue creation.
 
+### auto-issue-fixer
+
+Automate the complete GitHub issue lifecycle with TDD and draft PR workflow.
+
+**Triggers:**
+- "Auto fix issues"
+- "Process GitHub issues"
+- "Fix next issue"
+
+**Workflow:**
+1. Fetches and prioritizes all open issues by importance and speed
+2. Selects highest-priority issue automatically
+3. Implements fix using TDD (Red-Green-Refactor)
+4. Creates draft PR with comprehensive description
+5. Monitors CI and addresses failures automatically
+6. Handles review feedback autonomously
+7. Marks PR ready when all checks pass
+
+**Features:**
+- Fully autonomous operation (no confirmation prompts)
+- Draft PR workflow - only marked ready when complete
+- Extensive subagent usage for context efficiency
+- Configurable feedback iteration limits
+- Automatic escalation on defined failure conditions
+- Comprehensive prioritization algorithm
+
 ### race-condition-audit
 
 Systematic identification of race conditions and concurrency bugs.

@@ -153,6 +153,84 @@ Before outputting, verify:
 - [ ] No shell-breaking characters
 - [ ] Fallback instructions included
 
+## Subagent Usage
+
+Use an Explore agent to gather codebase context without bloating main conversation.
+
+### Step 2: Explore Agent for Codebase Analysis
+
+Replace manual exploration commands with a single Explore agent:
+
+```
+Launch Explore agent:
+"Explore the codebase to gather context for generating a Ralph prompt.
+
+Task description from user: {task_description}
+
+Gather this information:
+
+1. **Project Structure**
+   - Main entry points
+   - Directory organization
+   - Primary language(s)
+
+2. **Testing Infrastructure**
+   - Test framework (jest, pytest, go test, etc.)
+   - Test file naming pattern (*.test.*, *.spec.*, *_test.*)
+   - Test run command (from package.json scripts, Makefile, etc.)
+   - Example test file path
+
+3. **Build/CI Configuration**
+   - Build command
+   - Lint command
+   - CI workflow files (.github/workflows/)
+   - Dockerfile if present
+
+4. **Task-Relevant Files**
+   - Files matching keywords from task description
+   - Similar existing implementations
+   - Related type definitions
+   - Test files for affected areas
+
+5. **Code Patterns**
+   - Error handling patterns
+   - Logging patterns
+   - Common abstractions used
+
+Return structured summary with actual file paths and commands."
+```
+
+**Benefits:**
+- Single agent replaces 5-10 manual searches
+- Exploration output summarized, not dumped into main context
+- Agent can be thorough without token pressure
+- Main context receives only what's needed for prompt generation
+
+### Using Exploration Results
+
+After agent returns, use the structured data to fill prompt template:
+
+```markdown
+### Key Files (from exploration)
+- {actual_path_1} - {why_relevant}
+- {actual_path_2} - {why_relevant}
+- {actual_test_path} - verification
+
+### Success Criteria (from exploration)
+- {actual_test_command} passes
+- {actual_build_command} succeeds
+```
+
+**When to use Explore agent:**
+- Unfamiliar codebase
+- Task spans multiple areas
+- User hasn't provided file paths
+
+**When to skip:**
+- User provided specific file paths already
+- Small, familiar codebase
+- Follow-up prompt in same session (reuse previous exploration)
+
 ## Example Codebase-Aware Output
 
 After exploring a TypeScript monorepo with NX:
