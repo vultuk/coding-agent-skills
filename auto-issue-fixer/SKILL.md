@@ -50,6 +50,39 @@ This skill runs completely autonomously:
 
 ---
 
+## Status Output
+
+**IMPORTANT**: Output clear status messages at each stage so the user can follow progress. Use this format:
+
+```
+================================================================================
+AUTO-ISSUE-FIXER: [PHASE] - [ACTION]
+================================================================================
+```
+
+### Required Status Messages
+
+Output these messages at each stage:
+
+| Phase | Message |
+|-------|---------|
+| Start | `AUTO-ISSUE-FIXER: STARTING - Fetching issues from repository` |
+| Issues found | `AUTO-ISSUE-FIXER: FOUND {N} ISSUES - Analysing priorities...` |
+| Issue selected | `AUTO-ISSUE-FIXER: SELECTED ISSUE #{N} - {title}` |
+| Sync | `AUTO-ISSUE-FIXER: SYNCING - Pulling latest from origin/main` |
+| Planning | `AUTO-ISSUE-FIXER: PLANNING - Creating TDD implementation plan` |
+| RED phase | `AUTO-ISSUE-FIXER: TDD RED - Writing failing tests` |
+| GREEN phase | `AUTO-ISSUE-FIXER: TDD GREEN - Implementing to pass tests` |
+| REFACTOR phase | `AUTO-ISSUE-FIXER: TDD REFACTOR - Cleaning up implementation` |
+| PR created | `AUTO-ISSUE-FIXER: PR CREATED - #{N} {url}` |
+| Monitoring | `AUTO-ISSUE-FIXER: MONITORING - Waiting for CI and reviews` |
+| Feedback | `AUTO-ISSUE-FIXER: FEEDBACK - Processing {N} items` |
+| Complete | `AUTO-ISSUE-FIXER: COMPLETE - PR #{N} ready for review` |
+| No issues | `AUTO-ISSUE-FIXER: NO ISSUES - No actionable issues found` |
+| Error | `AUTO-ISSUE-FIXER: ERROR - {description}` |
+
+---
+
 ## Phase 1: Issue Discovery and Prioritization
 
 ### 1.1 Fetch All Issues
