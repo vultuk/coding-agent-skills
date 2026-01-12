@@ -81,6 +81,11 @@ if ! command -v gh &> /dev/null; then
     exit 1
 fi
 
+if ! gh auth status &> /dev/null; then
+    error "gh is not authenticated. Run: gh auth login"
+    exit 1
+fi
+
 if ! command -v jq &> /dev/null; then
     error "jq is not installed"
     exit 1
@@ -105,39 +110,13 @@ if [[ "$JSON_OUTPUT" != "true" ]]; then
     info "Fetching feedback for PR #$PR_NUMBER..."
 fi
 
-# GraphQL query to fetch all review threads with comments
-THREADS_QUERY='
+# GraphQL query to fetch PR metadata, reviews, and comments
+PR_QUERY='
 query($owner: String!, $repo: String!, $pr: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $pr) {
       title
       state
-      reviewThreads(first: 100) {
-        nodes {
-          id
-          isResolved
-          isOutdated
-          path
-          line
-          startLine
-          diffSide
-          comments(first: 50) {
-            nodes {
-              id
-              author {
-                login
-              }
-              body
-              createdAt
-              updatedAt
-              state
-              replyTo {
-                id
-              }
-            }
-          }
-        }
-      }
       reviews(first: 50) {
         nodes {
           id
@@ -172,9 +151,49 @@ query($owner: String!, $repo: String!, $pr: Int!) {
 }
 '
 
-# Fetch all PR feedback
+# GraphQL query to fetch review threads with pagination
+THREADS_QUERY='
+query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          isResolved
+          isOutdated
+          path
+          line
+          startLine
+          diffSide
+          comments(first: 50) {
+            nodes {
+              id
+              author {
+                login
+              }
+              body
+              createdAt
+              updatedAt
+              state
+              replyTo {
+                id
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+'
+
+# Fetch PR metadata and reviews/comments
 RESULT=$(gh api graphql \
-    -f query="$THREADS_QUERY" \
+    -f query="$PR_QUERY" \
     -f owner="$OWNER" \
     -f repo="$REPO" \
     -F pr="$PR_NUMBER" 2>/dev/null)
@@ -188,21 +207,66 @@ fi
 PR_TITLE=$(echo "$RESULT" | jq -r '.data.repository.pullRequest.title')
 PR_STATE=$(echo "$RESULT" | jq -r '.data.repository.pullRequest.state')
 
+REVIEWS=$(echo "$RESULT" | jq '.data.repository.pullRequest.reviews.nodes // []')
+COMMENTS=$(echo "$RESULT" | jq '.data.repository.pullRequest.comments.nodes // []')
+
+# Fetch review threads with pagination
+REVIEW_THREADS="[]"
+CURSOR=""
+HAS_NEXT=true
+
+while [[ "$HAS_NEXT" == "true" ]]; do
+    if [[ -n "$CURSOR" ]]; then
+        THREADS_RESULT=$(gh api graphql \
+            -f query="$THREADS_QUERY" \
+            -f owner="$OWNER" \
+            -f repo="$REPO" \
+            -F pr="$PR_NUMBER" \
+            -f cursor="$CURSOR" 2>/dev/null)
+    else
+        THREADS_RESULT=$(gh api graphql \
+            -f query="$THREADS_QUERY" \
+            -f owner="$OWNER" \
+            -f repo="$REPO" \
+            -F pr="$PR_NUMBER" 2>/dev/null)
+    fi
+
+    if [[ -z "$THREADS_RESULT" ]]; then
+        error "Failed to fetch review threads"
+        exit 1
+    fi
+
+    THREAD_NODES=$(echo "$THREADS_RESULT" | jq '.data.repository.pullRequest.reviewThreads.nodes // []')
+    REVIEW_THREADS=$(echo "$REVIEW_THREADS $THREAD_NODES" | jq -s 'add')
+
+    HAS_NEXT=$(echo "$THREADS_RESULT" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false')
+    CURSOR=$(echo "$THREADS_RESULT" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // ""')
+done
+
 # Process review threads (inline code comments)
-REVIEW_THREADS=$(echo "$RESULT" | jq '.data.repository.pullRequest.reviewThreads.nodes')
 THREAD_COUNT=$(echo "$REVIEW_THREADS" | jq 'length')
 UNRESOLVED_THREADS=$(echo "$REVIEW_THREADS" | jq '[.[] | select(.isResolved == false)]')
 UNRESOLVED_COUNT=$(echo "$UNRESOLVED_THREADS" | jq 'length')
 
 # Process reviews (approve/request changes)
-REVIEWS=$(echo "$RESULT" | jq '.data.repository.pullRequest.reviews.nodes')
+# CRITICAL: Get the LATEST review from each author, not all historical reviews
+# GitHub shows the latest review per reviewer - we must match this behavior
 REVIEW_COUNT=$(echo "$REVIEWS" | jq 'length')
-CHANGES_REQUESTED=$(echo "$REVIEWS" | jq '[.[] | select(.state == "CHANGES_REQUESTED")]')
-CHANGES_REQUESTED_COUNT=$(echo "$CHANGES_REQUESTED" | jq 'length')
-APPROVED_COUNT=$(echo "$REVIEWS" | jq '[.[] | select(.state == "APPROVED")] | length')
 
-# Process general comments
-COMMENTS=$(echo "$RESULT" | jq '.data.repository.pullRequest.comments.nodes')
+# Get latest review per author (sorted by createdAt, grouped by author, take last)
+LATEST_REVIEWS_PER_AUTHOR=$(echo "$REVIEWS" | jq '
+  map(select(.author != null and .author.login != null)) |
+  sort_by(.author.login) |
+  group_by(.author.login) |
+  map(sort_by(.createdAt) | last) |
+  [.[] | select(. != null)]
+')
+
+# Check for CHANGES_REQUESTED in the LATEST reviews (not historical ones)
+CHANGES_REQUESTED=$(echo "$LATEST_REVIEWS_PER_AUTHOR" | jq '[.[] | select(.state == "CHANGES_REQUESTED")]')
+CHANGES_REQUESTED_COUNT=$(echo "$CHANGES_REQUESTED" | jq 'length')
+APPROVED_COUNT=$(echo "$LATEST_REVIEWS_PER_AUTHOR" | jq '[.[] | select(.state == "APPROVED")] | length')
+
 COMMENT_COUNT=$(echo "$COMMENTS" | jq 'length')
 
 # Build structured output

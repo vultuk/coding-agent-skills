@@ -25,6 +25,8 @@ arguments:
 
 Perform comprehensive code audits and generate structured markdown reports.
 
+**Codex note:** This skill references Claude Code subagents (`Task(...)`). In Codex, run the equivalent steps with tool calls (for example `functions.shell_command` and `multi_tool_use.parallel`) or run them sequentially. See [`../../COMPATIBILITY.md`](../../COMPATIBILITY.md).
+
 ## Workflow
 
 1. **Scope**: Determine target (full repo, specific path, or focused concern)

@@ -148,7 +148,12 @@ OUTPUT=$(echo "$ISSUES_JSON" | jq '
       "assignees": [.assignees[].login],
       "created_at": .createdAt,
       "updated_at": .updatedAt,
-      "comment_count": (.comments | length),
+      "comment_count": (
+        (.comments // 0) as $c |
+        if ($c | type) == "array" then ($c | length)
+        elif ($c | type) == "number" then $c
+        else 0 end
+      ),
       "milestone": (.milestone.title // null),
       "body_length": (.body // "" | length),
       "has_code_blocks": ((.body // "") | test("```")),

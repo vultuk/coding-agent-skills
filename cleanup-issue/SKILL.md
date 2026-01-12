@@ -49,13 +49,10 @@ The script provides helpful information when the PR cannot be merged:
 
 ### 2. Start fresh session
 
-After cleanup completes successfully, output:
+After cleanup completes successfully:
 
-```
-/new
-```
-
-This starts a fresh Claude Code session, ready for the next task.
+- **Claude Code:** output `/new` to start a fresh session.
+- **Codex:** say "Ready for next task."
 
 ## Manual Steps
 

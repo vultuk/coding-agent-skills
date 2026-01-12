@@ -177,7 +177,7 @@ else
             
             if confirm "Merge PR #$PR_NUMBER?"; then
                 info "=== Merging PR #$PR_NUMBER ==="
-                gh pr merge "$PR_NUMBER" --merge --delete-branch
+                gh pr merge "$PR_NUMBER" --merge --delete-branch --yes
                 success "PR merged successfully!"
             else
                 echo "Skipping merge."
@@ -259,4 +259,4 @@ echo ""
 echo "Current worktrees:"
 git worktree list
 echo ""
-echo "Ready for next task. Run /new to start fresh."
+echo "Ready for next task. If using Claude Code, run /new to start fresh."

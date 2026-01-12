@@ -7,6 +7,8 @@ description: Generate optimized Ralph Wiggum prompts for Claude Code iterative l
 
 Generate effective prompts for the Ralph Wiggum iterative loop technique, enhanced with actual codebase analysis.
 
+**Codex note:** Codex does not run `/ralph-loop`. In Codex, generate the command text only and do not execute it. Use tool calls (for example `functions.shell_command`) for codebase exploration. See [`../../COMPATIBILITY.md`](../../COMPATIBILITY.md).
+
 ## About Ralph
 
 Ralph is a development methodology using a stop hook that intercepts Claude Code exit attempts, feeding the same prompt back repeatedly until a completion promise is detected or max iterations reached.

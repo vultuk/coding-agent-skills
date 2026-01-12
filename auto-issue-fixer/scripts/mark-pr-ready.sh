@@ -75,6 +75,11 @@ if ! command -v gh &> /dev/null; then
     exit 1
 fi
 
+if ! gh auth status &> /dev/null; then
+    error "gh is not authenticated. Run: gh auth login"
+    exit 1
+fi
+
 if ! command -v jq &> /dev/null; then
     error "jq is not installed"
     exit 1
@@ -155,18 +160,58 @@ if [[ "$FORCE" != "true" ]]; then
         info "No CI checks configured"
     fi
 
-    # Check 2: Unresolved review threads
-    info "Checking review threads..."
-    THREADS_QUERY='
+    # Check 2: Comprehensive review status (threads, reviews, and comments)
+    info "Checking all review feedback..."
+    FULL_REVIEW_QUERY='
     query($owner: String!, $repo: String!, $pr: Int!) {
         repository(owner: $owner, name: $repo) {
             pullRequest(number: $pr) {
-                reviewThreads(first: 100) {
+                mergeable
+                mergeStateStatus
+                reviewDecision
+                reviews(first: 50) {
+                    nodes {
+                        id
+                        state
+                        body
+                        createdAt
+                        author { login }
+                    }
+                }
+                comments(first: 100) {
+                    nodes {
+                        id
+                        body
+                        createdAt
+                        author { login }
+                    }
+                }
+            }
+        }
+    }'
+
+    REVIEW_RESULT=$(gh api graphql \
+        -f query="$FULL_REVIEW_QUERY" \
+        -f owner="$OWNER" \
+        -f repo="$REPO" \
+        -F pr="$PR_NUMBER" 2>/dev/null || echo '{}')
+
+    # Fetch review threads with pagination
+    THREADS_QUERY='
+    query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
+        repository(owner: $owner, name: $repo) {
+            pullRequest(number: $pr) {
+                reviewThreads(first: 100, after: $cursor) {
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
                     nodes {
                         isResolved
                         comments(first: 1) {
                             nodes {
                                 body
+                                author { login }
                             }
                         }
                     }
@@ -175,20 +220,128 @@ if [[ "$FORCE" != "true" ]]; then
         }
     }'
 
-    THREADS_RESULT=$(gh api graphql \
-        -f query="$THREADS_QUERY" \
-        -f owner="$OWNER" \
-        -f repo="$REPO" \
-        -F pr="$PR_NUMBER" 2>/dev/null || echo '{}')
+    ALL_THREADS="[]"
+    CURSOR=""
+    HAS_NEXT=true
 
-    UNRESOLVED_COUNT=$(echo "$THREADS_RESULT" | jq \
-        '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' 2>/dev/null || echo "0")
+    while [[ "$HAS_NEXT" == "true" ]]; do
+        if [[ -n "$CURSOR" ]]; then
+            THREADS_RESULT=$(gh api graphql \
+                -f query="$THREADS_QUERY" \
+                -f owner="$OWNER" \
+                -f repo="$REPO" \
+                -F pr="$PR_NUMBER" \
+                -f cursor="$CURSOR" 2>/dev/null || echo '{}')
+        else
+            THREADS_RESULT=$(gh api graphql \
+                -f query="$THREADS_QUERY" \
+                -f owner="$OWNER" \
+                -f repo="$REPO" \
+                -F pr="$PR_NUMBER" 2>/dev/null || echo '{}')
+        fi
+
+        THREAD_NODES=$(echo "$THREADS_RESULT" | jq '.data.repository.pullRequest.reviewThreads.nodes // []' 2>/dev/null || echo "[]")
+        ALL_THREADS=$(echo "$ALL_THREADS $THREAD_NODES" | jq -s 'add')
+
+        HAS_NEXT=$(echo "$THREADS_RESULT" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false')
+        CURSOR=$(echo "$THREADS_RESULT" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // ""')
+    done
+
+    # Check 2-pre: GitHub's own merge state (catches issues we might miss)
+    MERGE_STATE=$(echo "$REVIEW_RESULT" | jq -r '.data.repository.pullRequest.mergeStateStatus // "UNKNOWN"')
+    REVIEW_DECISION=$(echo "$REVIEW_RESULT" | jq -r '.data.repository.pullRequest.reviewDecision // "NONE"')
+    MERGEABLE=$(echo "$REVIEW_RESULT" | jq -r '.data.repository.pullRequest.mergeable // "UNKNOWN"')
+
+    info "GitHub merge state: $MERGE_STATE, Review decision: $REVIEW_DECISION, Mergeable: $MERGEABLE"
+
+    # If GitHub says it's blocked, we should respect that
+    if [[ "$MERGE_STATE" == "BLOCKED" ]]; then
+        error "GitHub reports PR is BLOCKED from merging"
+        if [[ "$REVIEW_DECISION" == "CHANGES_REQUESTED" ]]; then
+            error "Reason: Changes have been requested by a reviewer"
+        elif [[ "$REVIEW_DECISION" == "REVIEW_REQUIRED" ]]; then
+            error "Reason: Review is required before merging"
+        fi
+        VERIFICATION_PASSED=false
+    fi
+
+    if [[ "$MERGEABLE" == "CONFLICTING" ]]; then
+        error "PR has merge conflicts that must be resolved"
+        VERIFICATION_PASSED=false
+    fi
+
+    # Check 2a: Unresolved review threads
+    UNRESOLVED_COUNT=$(echo "$ALL_THREADS" | jq \
+        '[.[] | select(.isResolved == false)] | length' 2>/dev/null || echo "0")
 
     if [[ "$UNRESOLVED_COUNT" -gt 0 ]]; then
         error "Unresolved review threads: $UNRESOLVED_COUNT"
         VERIFICATION_PASSED=false
     else
         info "Review threads: All resolved"
+    fi
+
+    # Check 2b: Reviews with "changes requested" status (CRITICAL - catches Copilot/Claude reviews)
+    # IMPORTANT: Get the LATEST review from each author, not all historical reviews
+    # GitHub shows the latest review per reviewer - we must match this behavior
+    LATEST_REVIEWS=$(echo "$REVIEW_RESULT" | jq '
+        [.data.repository.pullRequest.reviews.nodes |
+         map(select(.author != null and .author.login != null)) |
+         sort_by(.author.login) |
+         group_by(.author.login) |
+         map(sort_by(.createdAt) | last) |
+         .[] | select(. != null)]' 2>/dev/null || echo "[]")
+
+    CHANGES_REQUESTED=$(echo "$LATEST_REVIEWS" | jq '[.[] | select(.state == "CHANGES_REQUESTED")]')
+    CHANGES_REQUESTED_COUNT=$(echo "$CHANGES_REQUESTED" | jq 'length')
+
+    if [[ "$CHANGES_REQUESTED_COUNT" -gt 0 ]]; then
+        error "Reviews requesting changes: $CHANGES_REQUESTED_COUNT"
+        echo "$CHANGES_REQUESTED" | jq -r '.[] | "  - @\(.author.login): \(.body | split("\n")[0] | .[0:80])"' >&2
+        VERIFICATION_PASSED=false
+    else
+        info "Review status: No pending change requests"
+    fi
+
+    # Check 2c: Pending reviews from known bot reviewers (Copilot, Claude, etc.)
+    # These often arrive AFTER CI completes - we must not miss them
+    # Use LATEST_REVIEWS (already computed above) to check bot reviewer status
+    BOT_REVIEWERS='["copilot", "github-actions", "claude", "dependabot", "renovate", "coderabbitai"]'
+    RECENT_BOT_REVIEWS=$(echo "$LATEST_REVIEWS" | jq --argjson bots "$BOT_REVIEWERS" \
+        '[.[] |
+          select(.author.login as $login | $bots | any(. as $bot | $login | ascii_downcase | contains($bot))) |
+          select(.state == "CHANGES_REQUESTED" or .state == "COMMENTED")]' 2>/dev/null || echo "[]")
+    RECENT_BOT_REVIEW_COUNT=$(echo "$RECENT_BOT_REVIEWS" | jq 'length')
+
+    if [[ "$RECENT_BOT_REVIEW_COUNT" -gt 0 ]]; then
+        # Check if any bot reviews have actionable content (not just approvals)
+        ACTIONABLE_BOT_REVIEWS=$(echo "$RECENT_BOT_REVIEWS" | jq \
+            '[.[] | select(.body != null and .body != "" and (.body | test("(?i)(fix|issue|error|warning|should|must|recommend|suggestion|potential|vulnerability|security|bug)")))]')
+        ACTIONABLE_COUNT=$(echo "$ACTIONABLE_BOT_REVIEWS" | jq 'length')
+
+        if [[ "$ACTIONABLE_COUNT" -gt 0 ]]; then
+            error "Unaddressed bot reviews (Copilot/Claude/etc.): $ACTIONABLE_COUNT"
+            echo "$ACTIONABLE_BOT_REVIEWS" | jq -r '.[] | "  - @\(.author.login) [\(.state)]: \(.body | split("\n")[0] | .[0:60])..."' >&2
+            VERIFICATION_PASSED=false
+        else
+            info "Bot reviews: Present but no actionable items"
+        fi
+    else
+        info "Bot reviews: None pending"
+    fi
+
+    # Check 2d: Recent comments with actionable feedback (may contain review items)
+    # Look for comments with keywords indicating unaddressed feedback
+    ACTIONABLE_COMMENTS=$(echo "$REVIEW_RESULT" | jq \
+        '[.data.repository.pullRequest.comments.nodes[] |
+          select(.body | test("(?i)(fix|must|should|please|blocker|critical|p0|p1|todo|action required|needs|missing)")) |
+          select(.body | test("(?i)(done|fixed|resolved|addressed|completed|lgtm|approved)") | not)]' 2>/dev/null || echo "[]")
+    ACTIONABLE_COMMENT_COUNT=$(echo "$ACTIONABLE_COMMENTS" | jq 'length')
+
+    if [[ "$ACTIONABLE_COMMENT_COUNT" -gt 0 ]]; then
+        warn "Comments with potentially unaddressed feedback: $ACTIONABLE_COMMENT_COUNT"
+        echo "$ACTIONABLE_COMMENTS" | jq -r '.[] | "  - @\(.author.login): \(.body | split("\n")[0] | .[0:60])..."' >&2
+        # This is a warning, not a failure - but log it for visibility
     fi
 
     # Abort if verification failed

@@ -53,6 +53,23 @@ if [[ -z "$BODY" ]]; then
     exit 1
 fi
 
+if ! command -v gh &> /dev/null; then
+    echo "Error: gh (GitHub CLI) is not installed" >&2
+    exit 1
+fi
+
+if ! gh auth status &> /dev/null; then
+    echo "Error: gh is not authenticated. Run: gh auth login" >&2
+    exit 1
+fi
+
+if [[ -z "$REPO" ]]; then
+    if ! gh repo view &> /dev/null; then
+        echo "Error: Not in a GitHub repository. Use --repo OWNER/REPO." >&2
+        exit 1
+    fi
+fi
+
 # Use provided title or generate default
 if [[ -z "$TITLE" ]]; then
     DATE=$(date +%Y-%m-%d)

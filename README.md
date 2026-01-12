@@ -1,6 +1,7 @@
-# Claude Code Skills
+# Codex + Claude Code Skills
 
-A collection of custom skills for Claude Code that automate common development workflows.
+A collection of custom skills that automate common development workflows in both Codex CLI and Claude Code.
+See [`../COMPATIBILITY.md`](../COMPATIBILITY.md) for dual-mode notes.
 
 ## Skills
 
@@ -148,14 +149,15 @@ Systematic identification of race conditions and concurrency bugs.
 
 ## Requirements
 
-- Claude Code CLI
+- Codex CLI or Claude Code
 - GitHub CLI (`gh`) authenticated for GitHub-related skills
 - Git
 - jq (for JSON parsing in scripts)
 
 ## Installation
 
-These skills are automatically available when placed in `~/.claude/skills/`.
+- Claude Code: `~/.claude/skills/`
+- Codex CLI: `$CODEX_HOME/skills` (often `~/.codex/skills`)
 
 ## Skill Format
 

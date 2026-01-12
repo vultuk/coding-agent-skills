@@ -14,6 +14,16 @@ if [ -z "$THREAD_ID" ]; then
     exit 1
 fi
 
+if ! command -v gh &> /dev/null; then
+    echo "Error: gh (GitHub CLI) is not installed" >&2
+    exit 1
+fi
+
+if ! gh auth status &> /dev/null; then
+    echo "Error: gh is not authenticated. Run: gh auth login" >&2
+    exit 1
+fi
+
 echo "Resolving thread: $THREAD_ID"
 
 RESULT=$(gh api graphql -f query='

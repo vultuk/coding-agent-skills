@@ -9,10 +9,7 @@ triggers:
   - "debug non-deterministic"
   - "review async code"
 prerequisites:
-  - Language-specific tools (optional but recommended):
-    - Go: `go test -race`
-    - C++: ThreadSanitizer (clang/gcc)
-    - Java: FindBugs, SpotBugs
+  - "Language-specific tools (optional): Go race detector, ThreadSanitizer (C++), FindBugs/SpotBugs (Java)"
 arguments:
   - name: SCOPE
     required: false
@@ -25,6 +22,8 @@ arguments:
 # Race Condition Audit
 
 Systematic process for finding concurrency bugs that cause data corruption, deadlocks, or non-deterministic behavior.
+
+**Codex note:** This skill references Claude Code subagents (`Task(...)`). In Codex, run the equivalent steps with tool calls (for example `functions.shell_command` and `multi_tool_use.parallel`) or run them sequentially. See [`../../COMPATIBILITY.md`](../../COMPATIBILITY.md).
 
 ## Process
 

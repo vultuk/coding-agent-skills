@@ -42,6 +42,10 @@ if ! gh auth status &> /dev/null; then
     error "GitHub CLI is not authenticated. Run 'gh auth login' first."
 fi
 
+if ! command -v jq &> /dev/null; then
+    error "jq is not installed. Install it before continuing."
+fi
+
 # Check rate limit before proceeding
 check_rate_limit() {
     local remaining
@@ -236,7 +240,7 @@ else
             echo "$LOGS" | grep -i -A 20 "error\|failed\|failure\|exception" | head -100 || echo "No error patterns found in logs"
         else
             echo "Could not retrieve logs. View online:"
-            gh run view "$RUN_ID" --web --json url -q '.url' 2>/dev/null || echo "  gh run view $RUN_ID --web"
+            gh run view "$RUN_ID" --json url -q '.url' 2>/dev/null || echo "  gh run view $RUN_ID --web"
         fi
     fi
 fi

@@ -30,6 +30,15 @@ arguments:
   - name: REVIEW_TIMEOUT_MINUTES
     required: false
     description: How long to wait for reviews before proceeding (default 30)
+  - name: BOT_WAIT_MINUTES
+    required: false
+    description: Minutes to wait for bot reviews (Copilot, Claude) after CI passes (default 5)
+  - name: QUIET_PERIOD_MINUTES
+    required: false
+    description: Minutes of no new reviews required before marking PR ready (default 3)
+  - name: AUTO_MERGE
+    required: false
+    description: Automatically merge PR when complete (true/false, default false). If true, merges after all reviews addressed. If false, notifies user for manual merge.
 ---
 
 # Auto Issue Fixer
@@ -37,6 +46,8 @@ arguments:
 Fully autonomous GitHub issue lifecycle automation with TDD implementation.
 
 ## Overview
+
+**Codex note:** This skill references Claude Code subagents (`Task(...)`). In Codex, run the equivalent steps with tool calls (for example `functions.shell_command` and `multi_tool_use.parallel`) or run them sequentially. See [`../../COMPATIBILITY.md`](../../COMPATIBILITY.md).
 
 This skill runs completely autonomously:
 1. Fetches and prioritizes all open issues
@@ -76,8 +87,12 @@ Output these messages at each stage:
 | REFACTOR phase | `AUTO-ISSUE-FIXER: TDD REFACTOR - Cleaning up implementation` |
 | PR created | `AUTO-ISSUE-FIXER: PR CREATED - #{N} {url}` |
 | Monitoring | `AUTO-ISSUE-FIXER: MONITORING - Waiting for CI and reviews` |
+| Bot wait | `AUTO-ISSUE-FIXER: WAITING - Waiting for bot reviews (Copilot, Claude)` |
 | Feedback | `AUTO-ISSUE-FIXER: FEEDBACK - Processing {N} items` |
+| Quiet period | `AUTO-ISSUE-FIXER: VERIFYING - Quiet period check ({N} min remaining)` |
 | Complete | `AUTO-ISSUE-FIXER: COMPLETE - PR #{N} ready for review` |
+| Merging | `AUTO-ISSUE-FIXER: MERGING - Auto-merge enabled, merging PR #{N}` |
+| Merged | `AUTO-ISSUE-FIXER: MERGED - PR #{N} merged successfully` |
 | No issues | `AUTO-ISSUE-FIXER: NO ISSUES - No actionable issues found` |
 | Error | `AUTO-ISSUE-FIXER: ERROR - {description}` |
 
@@ -635,36 +650,75 @@ When reviewers disagree:
 ```
 ITERATION=0
 MAX_ITERATIONS=$MAX_FEEDBACK_ITERATIONS
+BOT_WAIT_MINUTES=5  # Time to wait for Copilot/Claude after CI
+QUIET_PERIOD_MINUTES=3  # Time with no new reviews before marking ready
 
 while [ $ITERATION -lt $MAX_ITERATIONS ]; do
     ITERATION=$((ITERATION + 1))
 
-    # 1. Fetch current feedback state
+    # 1. Fetch current feedback state (ALL types - threads, reviews, comments)
     FEEDBACK=$(scripts/fetch-pr-comments.sh $PR_NUMBER --json)
     UNRESOLVED=$(echo "$FEEDBACK" | jq '.summary.unresolved_threads')
     CHANGES_REQUESTED=$(echo "$FEEDBACK" | jq '.summary.changes_requested')
+    ACTIONABLE_COMMENTS=$(echo "$FEEDBACK" | jq '.summary.actionable_comments')
 
-    # 2. If nothing to address, check if ready
-    if [ "$UNRESOLVED" -eq 0 ] && [ "$CHANGES_REQUESTED" -eq 0 ]; then
-        # Wait for CI and proceed to Phase 6
-        break
-    fi
+    # 2. If nothing to address, DON'T break yet - must wait for bot reviews
+    if [ "$UNRESOLVED" -eq 0 ] && [ "$CHANGES_REQUESTED" -eq 0 ] && [ "$ACTIONABLE_COMMENTS" -eq 0 ]; then
+        info "No pending feedback - waiting for potential bot reviews..."
+        # Continue to step 5 to wait for bots
+    else
+        # 3. Process all actionable items
+        # (Use subagents as described above)
 
-    # 3. Process all actionable items
-    # (Use subagents as described above)
-
-    # 4. Commit any changes
-    git add -A
-    if ! git diff --cached --quiet; then
-        git commit -m "Address review feedback (iteration $ITERATION)"
-        git push
+        # 4. Commit any changes
+        git add -A
+        if ! git diff --cached --quiet; then
+            git commit -m "Address review feedback (iteration $ITERATION)"
+            git push
+        fi
     fi
 
     # 5. Wait for CI
     scripts/wait-for-ci.sh $PR_NUMBER --timeout 10
 
-    # 6. Wait for potential follow-up feedback
-    scripts/monitor-pr.sh $PR_NUMBER --timeout 5 --interval 30
+    # 6. CRITICAL: Wait for bot reviews AFTER CI completes
+    # Copilot often arrives 2-5 minutes after CI passes
+    info "Waiting $BOT_WAIT_MINUTES minutes for bot reviews (Copilot, Claude)..."
+    scripts/monitor-pr.sh $PR_NUMBER --timeout $BOT_WAIT_MINUTES --interval 30
+
+    # 7. Re-fetch feedback - bots may have added new items
+    FEEDBACK=$(scripts/fetch-pr-comments.sh $PR_NUMBER --json)
+    UNRESOLVED=$(echo "$FEEDBACK" | jq '.summary.unresolved_threads')
+    CHANGES_REQUESTED=$(echo "$FEEDBACK" | jq '.summary.changes_requested')
+    ACTIONABLE_COMMENTS=$(echo "$FEEDBACK" | jq '.summary.actionable_comments')
+
+    # 8. Check if truly ready (nothing pending after bot wait)
+    if [ "$UNRESOLVED" -eq 0 ] && [ "$CHANGES_REQUESTED" -eq 0 ] && [ "$ACTIONABLE_COMMENTS" -eq 0 ]; then
+        info "All feedback addressed - verifying quiet period..."
+
+        # 9. Quiet period check - ensure no new reviews for 3 minutes
+        QUIET_START=$(date +%s)
+        QUIET_OK=true
+
+        for i in $(seq 1 $QUIET_PERIOD_MINUTES); do
+            sleep 60
+            CURRENT_FEEDBACK=$(scripts/fetch-pr-comments.sh $PR_NUMBER --json)
+            NEW_UNRESOLVED=$(echo "$CURRENT_FEEDBACK" | jq '.summary.unresolved_threads')
+            NEW_CHANGES=$(echo "$CURRENT_FEEDBACK" | jq '.summary.changes_requested')
+
+            if [ "$NEW_UNRESOLVED" -gt 0 ] || [ "$NEW_CHANGES" -gt 0 ]; then
+                warn "New feedback arrived during quiet period - reprocessing..."
+                QUIET_OK=false
+                break
+            fi
+        done
+
+        if [ "$QUIET_OK" = true ]; then
+            info "Quiet period complete - proceeding to mark PR ready"
+            break
+        fi
+        # Otherwise continue loop to process new feedback
+    fi
 done
 
 if [ $ITERATION -ge $MAX_ITERATIONS ]; then
@@ -674,14 +728,89 @@ if [ $ITERATION -ge $MAX_ITERATIONS ]; then
 After $MAX_ITERATIONS feedback iterations, some items remain unresolved.
 Human review requested.
 
-Remaining unresolved threads: $UNRESOLVED"
+Remaining:
+- Unresolved threads: $UNRESOLVED
+- Changes requested: $CHANGES_REQUESTED
+- Actionable comments: $ACTIONABLE_COMMENTS"
 fi
 ```
 
-### 5.11 Iteration Limits and Escalation
+### 5.11 Wait for Bot Reviews (CRITICAL)
+
+**IMPORTANT**: Bot reviewers like Copilot and Claude often submit reviews AFTER CI completes. These reviews contain valuable feedback that MUST be addressed before marking the PR ready.
+
+**Known bot reviewers to wait for:**
+| Bot | Username Pattern | Typical Delay |
+|-----|------------------|---------------|
+| GitHub Copilot | `copilot[bot]`, `github-copilot` | 2-5 min after CI |
+| Claude | `claude[bot]`, `claude-code` | 1-3 min after CI |
+| CodeRabbit | `coderabbitai[bot]` | 3-7 min after CI |
+| Dependabot | `dependabot[bot]` | Immediate |
+| Renovate | `renovate[bot]` | Immediate |
+
+**Waiting strategy after each push:**
+
+```bash
+# After pushing changes:
+scripts/wait-for-ci.sh $PR_NUMBER --timeout 15
+
+# CRITICAL: Wait for bot reviews AFTER CI completes
+# Copilot especially often arrives 2-5 minutes after CI passes
+info "Waiting for bot reviews (Copilot, Claude, etc.)..."
+BOT_WAIT_MINUTES=5
+scripts/monitor-pr.sh $PR_NUMBER --timeout $BOT_WAIT_MINUTES --interval 30
+
+# Then re-check ALL feedback - bots may have added new items
+FEEDBACK=$(scripts/fetch-pr-comments.sh $PR_NUMBER --json)
+```
+
+**Never skip this wait** - Copilot reviews in particular contain security and quality feedback that is critical to address.
+
+### 5.12 Quiet Period Verification
+
+Before marking the PR as ready, verify there's been a "quiet period" with no new reviews:
+
+```bash
+# After processing all feedback:
+QUIET_PERIOD_MINUTES=3
+LAST_CHECK_TIME=$(date +%s)
+
+while true; do
+    # Wait for quiet period
+    sleep 60
+
+    # Fetch current state
+    CURRENT_FEEDBACK=$(scripts/fetch-pr-comments.sh $PR_NUMBER --json)
+    CURRENT_TIME=$(date +%s)
+
+    # Check for new items since last check
+    NEW_THREADS=$(echo "$CURRENT_FEEDBACK" | jq '.summary.unresolved_threads')
+    NEW_CHANGES=$(echo "$CURRENT_FEEDBACK" | jq '.summary.changes_requested')
+    NEW_ACTIONABLE=$(echo "$CURRENT_FEEDBACK" | jq '.summary.actionable_comments')
+
+    if [ "$NEW_THREADS" -gt 0 ] || [ "$NEW_CHANGES" -gt 0 ] || [ "$NEW_ACTIONABLE" -gt 0 ]; then
+        # New feedback arrived - process it and reset quiet period
+        info "New feedback detected - processing..."
+        # (Process feedback as per 5.4-5.6)
+        LAST_CHECK_TIME=$(date +%s)
+        continue
+    fi
+
+    # Check if quiet period has elapsed
+    ELAPSED=$((CURRENT_TIME - LAST_CHECK_TIME))
+    if [ $ELAPSED -ge $((QUIET_PERIOD_MINUTES * 60)) ]; then
+        info "Quiet period complete - no new reviews for $QUIET_PERIOD_MINUTES minutes"
+        break
+    fi
+done
+```
+
+### 5.13 Iteration Limits and Escalation
 
 - **Max iterations**: Default 3 (configurable via MAX_FEEDBACK_ITERATIONS)
-- **Per iteration**: Fetch all feedback → process → push → wait for CI → wait for response
+- **Per iteration**: Fetch all feedback → process → push → wait for CI → **wait for bot reviews** → wait for response
+- **Bot review wait**: Always wait at least 5 minutes after CI for Copilot/Claude reviews
+- **Quiet period**: Verify 3 minutes of no new activity before marking ready
 - **Escalation triggers**:
   - MAX_FEEDBACK_ITERATIONS exceeded
   - Reviewer explicitly requests human review
@@ -694,27 +823,95 @@ fi
 
 ### 6.1 Verify Completion Criteria
 
+**CRITICAL**: The PR must meet ALL criteria before marking ready. This is the final gate to ensure no reviews are missed.
+
 All must be true before marking ready:
 
 ```bash
-# CI green
+# 1. CI green
 CI_STATUS=$(gh pr checks $PR_NUMBER --json bucket -q '[.[] | .bucket] | unique')
 [ "$CI_STATUS" = '["pass"]' ] || exit 1
 
-# No unresolved threads
-UNRESOLVED=$(gh api graphql -f query='
+# 2. No unresolved review threads
+REVIEW_DATA=$(gh api graphql -f query='
   query($owner: String!, $repo: String!, $pr: Int!) {
     repository(owner: $owner, name: $repo) {
       pullRequest(number: $pr) {
         reviewThreads(first: 100) {
           nodes { isResolved }
         }
+        reviews(first: 50) {
+          nodes {
+            id
+            state
+            author { login }
+            body
+          }
+        }
+        comments(first: 100) {
+          nodes {
+            id
+            author { login }
+            body
+          }
+        }
       }
     }
-  }' -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" \
-  --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length')
-[ "$UNRESOLVED" = "0" ] || exit 1
+  }' -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER")
+
+UNRESOLVED=$(echo "$REVIEW_DATA" | jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length')
+[ "$UNRESOLVED" = "0" ] || { echo "ERROR: $UNRESOLVED unresolved threads"; exit 1; }
+
+# 3. No reviews requesting changes (includes Copilot, Claude, human reviews)
+CHANGES_REQUESTED=$(echo "$REVIEW_DATA" | jq '[.data.repository.pullRequest.reviews.nodes[] | select(.state == "CHANGES_REQUESTED")] | length')
+[ "$CHANGES_REQUESTED" = "0" ] || { echo "ERROR: $CHANGES_REQUESTED reviews requesting changes"; exit 1; }
+
+# 4. No unaddressed bot reviews (Copilot, Claude, etc.)
+BOT_PATTERNS="copilot|claude|coderabbit|github-actions"
+UNADDRESSED_BOT_REVIEWS=$(echo "$REVIEW_DATA" | jq --arg bots "$BOT_PATTERNS" '
+  [.data.repository.pullRequest.reviews.nodes[] |
+   select(.author.login | test($bots; "i")) |
+   select(.state == "CHANGES_REQUESTED" or (.state == "COMMENTED" and .body != null and .body != "" and (.body | test("(?i)(fix|issue|error|should|must|recommend)"))))] | length')
+[ "$UNADDRESSED_BOT_REVIEWS" = "0" ] || { echo "ERROR: $UNADDRESSED_BOT_REVIEWS unaddressed bot reviews"; exit 1; }
+
+# 5. Quiet period verified (no new reviews in last 3 minutes)
+# This should have been done in Phase 5, but verify again
+echo "All completion criteria verified"
 ```
+
+**Why each check matters:**
+| Check | Purpose |
+|-------|---------|
+| GitHub merge state | **CRITICAL**: If GitHub says BLOCKED, do NOT mark ready |
+| CI green | Code compiles, tests pass |
+| No unresolved threads | All inline comments addressed |
+| No changes requested | All formal review requests addressed (LATEST review per author) |
+| No unaddressed bot reviews | **Copilot/Claude feedback addressed** |
+| Quiet period | No late-arriving reviews pending |
+
+**CRITICAL: Latest Review Per Author**
+
+GitHub shows the LATEST review from each reviewer, not all historical reviews. The skill MUST match this behavior:
+
+```bash
+# WRONG: Checks all historical reviews (might miss current "changes requested")
+CHANGES_REQUESTED=$(echo "$REVIEWS" | jq '[.[] | select(.state == "CHANGES_REQUESTED")]')
+
+# RIGHT: Get latest review per author, then check status
+LATEST_REVIEWS=$(echo "$REVIEWS" | jq '
+  group_by(.author.login) |
+  map(sort_by(.createdAt) | last) |
+  [.[] | select(. != null)]
+')
+CHANGES_REQUESTED=$(echo "$LATEST_REVIEWS" | jq '[.[] | select(.state == "CHANGES_REQUESTED")]')
+```
+
+**CRITICAL: Respect GitHub's Merge State**
+
+Before marking ready, check GitHub's own merge state:
+- `mergeStateStatus: BLOCKED` → Do NOT mark ready (unresolved conversations, missing approvals)
+- `reviewDecision: CHANGES_REQUESTED` → Reviewer has requested changes
+- `mergeable: CONFLICTING` → Merge conflicts exist
 
 ### 6.2 Mark PR Ready for Review
 
@@ -792,6 +989,93 @@ gh issue edit $ISSUE_NUMBER --remove-label "auto-fixing" --add-label "auto-fixed
 
 This signals that automated work is complete and the PR is ready for human review.
 
+### 6.5 Auto-Merge Decision
+
+Based on the `AUTO_MERGE` argument, either merge automatically or leave for human:
+
+```bash
+if [ "$AUTO_MERGE" = "true" ]; then
+    info "AUTO-ISSUE-FIXER: MERGING - Auto-merge enabled, merging PR #$PR_NUMBER"
+
+    # Final safety checks before merge
+    # 1. Verify CI is still green (could have changed)
+    CI_STATUS=$(gh pr checks $PR_NUMBER --json bucket -q '[.[] | .bucket] | unique')
+    if [ "$CI_STATUS" != '["pass"]' ]; then
+        error "CI no longer passing - aborting auto-merge"
+        gh pr comment $PR_NUMBER -b "## Auto-Merge Aborted
+
+CI checks are no longer passing. Manual intervention required.
+
+Current CI status: $CI_STATUS"
+        exit 1
+    fi
+
+    # 2. Verify no new reviews arrived (final check)
+    FINAL_CHECK=$(scripts/fetch-pr-comments.sh $PR_NUMBER --json)
+    FINAL_UNRESOLVED=$(echo "$FINAL_CHECK" | jq '.summary.unresolved_threads')
+    FINAL_CHANGES=$(echo "$FINAL_CHECK" | jq '.summary.changes_requested')
+
+    if [ "$FINAL_UNRESOLVED" -gt 0 ] || [ "$FINAL_CHANGES" -gt 0 ]; then
+        error "New feedback arrived - aborting auto-merge"
+        gh pr comment $PR_NUMBER -b "## Auto-Merge Aborted
+
+New review feedback arrived after completion. Processing required.
+
+- Unresolved threads: $FINAL_UNRESOLVED
+- Changes requested: $FINAL_CHANGES"
+        exit 1
+    fi
+
+    # 3. Merge the PR
+    if gh pr merge $PR_NUMBER --squash --delete-branch; then
+        info "AUTO-ISSUE-FIXER: MERGED - PR #$PR_NUMBER merged successfully"
+
+        # Post success comment (will be on the now-closed PR)
+        gh pr comment $PR_NUMBER -b "## Auto-Merged
+
+PR was automatically merged after all criteria were met:
+- All CI checks passing
+- All review feedback addressed
+- All review threads resolved
+- Quiet period verified
+
+Issue #$ISSUE_NUMBER has been closed." 2>/dev/null || true
+
+    else
+        error "Merge failed - may require manual intervention"
+        gh pr comment $PR_NUMBER -b "## Auto-Merge Failed
+
+Attempted to merge but failed. Possible reasons:
+- Branch protection rules require additional approvals
+- Merge conflicts detected
+- Required status checks changed
+
+Please merge manually."
+        exit 1
+    fi
+
+else
+    # AUTO_MERGE is false or not set - leave for human
+    info "AUTO-ISSUE-FIXER: COMPLETE - PR #$PR_NUMBER ready for review"
+
+    # The mark-pr-ready.sh script already posted a comment tagging the user
+    # Just ensure the user knows to merge manually
+fi
+```
+
+**Auto-merge safety checks:**
+| Check | Why |
+|-------|-----|
+| CI still green | Status could have changed since last check |
+| No new reviews | Late-arriving feedback must be addressed |
+| Squash merge | Clean commit history |
+| Delete branch | Cleanup after merge |
+
+**When auto-merge is aborted:**
+- Posts a comment explaining why
+- Leaves PR open for manual intervention
+- Does NOT retry automatically (prevents loops)
+
 ---
 
 ## Escalation Triggers
@@ -866,8 +1150,11 @@ Escalation message:
 ## Quick Start
 
 ```bash
-# Fix the highest-priority issue
+# Fix the highest-priority issue (leaves PR for human to merge)
 /auto-issue-fixer
+
+# Fix and auto-merge when complete (fully autonomous)
+/auto-issue-fixer --auto-merge
 
 # Fix issues with specific label
 /auto-issue-fixer --labels bug
@@ -875,9 +1162,16 @@ Escalation message:
 # Dry run - analyze without implementing
 /auto-issue-fixer --dry-run
 
-# Process up to 3 issues
-/auto-issue-fixer --max-issues 3
+# Process up to 3 issues with auto-merge
+/auto-issue-fixer --max-issues 3 --auto-merge
+
+# Fully autonomous with custom wait times
+/auto-issue-fixer --auto-merge --bot-wait-minutes 7 --quiet-period-minutes 5
 ```
+
+**Auto-merge behavior:**
+- `--auto-merge` (or `AUTO_MERGE=true`): Merges PR automatically after all reviews addressed
+- Without flag: Notifies user and leaves PR open for manual merge (default)
 
 ---
 

@@ -86,6 +86,11 @@ if ! command -v gh &> /dev/null; then
     exit 1
 fi
 
+if ! gh auth status &> /dev/null; then
+    error "gh is not authenticated. Run: gh auth login"
+    exit 1
+fi
+
 if ! command -v jq &> /dev/null; then
     error "jq is not installed"
     exit 1
@@ -105,22 +110,13 @@ else
     REPO=$(echo "$REPO_INFO" | jq -r '.name')
 fi
 
-# GraphQL query to get full feedback state including review threads
-FEEDBACK_QUERY='
+# GraphQL query to get PR state, reviews, and comments
+STATE_QUERY='
 query($owner: String!, $repo: String!, $pr: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $pr) {
       state
       updatedAt
-      reviewThreads(first: 100) {
-        nodes {
-          id
-          isResolved
-          comments(first: 1) {
-            nodes { id body author { login } }
-          }
-        }
-      }
       reviews(first: 50) {
         nodes {
           id
@@ -143,13 +139,74 @@ query($owner: String!, $repo: String!, $pr: Int!) {
 }
 '
 
+# GraphQL query to get review threads with pagination
+THREADS_QUERY='
+query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          isResolved
+          comments(first: 1) {
+            nodes { id body author { login } }
+          }
+        }
+      }
+    }
+  }
+}
+'
+
 # Function to get current feedback state
 get_feedback_state() {
     gh api graphql \
-        -f query="$FEEDBACK_QUERY" \
+        -f query="$STATE_QUERY" \
         -f owner="$OWNER" \
         -f repo="$REPO" \
         -F pr="$PR_NUMBER" 2>/dev/null
+}
+
+get_review_threads() {
+    local all_threads="[]"
+    local cursor=""
+    local has_next=true
+    local result
+    local nodes
+
+    while [[ "$has_next" == "true" ]]; do
+        if [[ -n "$cursor" ]]; then
+            result=$(gh api graphql \
+                -f query="$THREADS_QUERY" \
+                -f owner="$OWNER" \
+                -f repo="$REPO" \
+                -F pr="$PR_NUMBER" \
+                -f cursor="$cursor" 2>/dev/null)
+        else
+            result=$(gh api graphql \
+                -f query="$THREADS_QUERY" \
+                -f owner="$OWNER" \
+                -f repo="$REPO" \
+                -F pr="$PR_NUMBER" 2>/dev/null)
+        fi
+
+        if [[ -z "$result" ]]; then
+            echo ""
+            return 1
+        fi
+
+        nodes=$(echo "$result" | jq '.data.repository.pullRequest.reviewThreads.nodes // []')
+        all_threads=$(echo "$all_threads $nodes" | jq -s 'add')
+
+        has_next=$(echo "$result" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false')
+        cursor=$(echo "$result" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // ""')
+    done
+
+    echo "$all_threads"
 }
 
 # Get initial state
@@ -164,14 +221,22 @@ fi
 INITIAL_STATE=$(echo "$INITIAL_RESULT" | jq '.data.repository.pullRequest')
 INITIAL_REVIEW_COUNT=$(echo "$INITIAL_STATE" | jq '.reviews.nodes | length')
 INITIAL_COMMENT_COUNT=$(echo "$INITIAL_STATE" | jq '.comments.nodes | length')
-INITIAL_THREAD_COUNT=$(echo "$INITIAL_STATE" | jq '.reviewThreads.nodes | length')
-INITIAL_UNRESOLVED=$(echo "$INITIAL_STATE" | jq '[.reviewThreads.nodes[] | select(.isResolved == false)] | length')
 INITIAL_UPDATED=$(echo "$INITIAL_STATE" | jq -r '.updatedAt')
+
+# Fetch initial review threads (paged)
+INITIAL_THREADS=$(get_review_threads)
+if [[ -z "$INITIAL_THREADS" ]]; then
+    error "Could not fetch review threads for PR #$PR_NUMBER"
+    exit 1
+fi
+
+INITIAL_THREAD_COUNT=$(echo "$INITIAL_THREADS" | jq 'length')
+INITIAL_UNRESOLVED=$(echo "$INITIAL_THREADS" | jq '[.[] | select(.isResolved == false)] | length')
 
 # Track IDs to detect new items (not just count changes)
 INITIAL_REVIEW_IDS=$(echo "$INITIAL_STATE" | jq '[.reviews.nodes[].id] | sort')
 INITIAL_COMMENT_IDS=$(echo "$INITIAL_STATE" | jq '[.comments.nodes[].id] | sort')
-INITIAL_THREAD_IDS=$(echo "$INITIAL_STATE" | jq '[.reviewThreads.nodes[].id] | sort')
+INITIAL_THREAD_IDS=$(echo "$INITIAL_THREADS" | jq '[.[].id] | sort')
 
 info "Initial state: $INITIAL_REVIEW_COUNT reviews, $INITIAL_COMMENT_COUNT comments, $INITIAL_THREAD_COUNT threads ($INITIAL_UNRESOLVED unresolved)"
 info "Monitoring for $TIMEOUT_MINUTES minutes (polling every $INTERVAL_SECONDS seconds)..."
@@ -218,12 +283,20 @@ while true; do
     # Get current counts and IDs
     CURRENT_REVIEW_COUNT=$(echo "$CURRENT_STATE" | jq '.reviews.nodes | length')
     CURRENT_COMMENT_COUNT=$(echo "$CURRENT_STATE" | jq '.comments.nodes | length')
-    CURRENT_THREAD_COUNT=$(echo "$CURRENT_STATE" | jq '.reviewThreads.nodes | length')
-    CURRENT_UNRESOLVED=$(echo "$CURRENT_STATE" | jq '[.reviewThreads.nodes[] | select(.isResolved == false)] | length')
+
+    CURRENT_THREADS=$(get_review_threads)
+    if [[ -z "$CURRENT_THREADS" ]]; then
+        warn "Failed to fetch review threads, retrying..."
+        sleep "$INTERVAL_SECONDS"
+        continue
+    fi
+
+    CURRENT_THREAD_COUNT=$(echo "$CURRENT_THREADS" | jq 'length')
+    CURRENT_UNRESOLVED=$(echo "$CURRENT_THREADS" | jq '[.[] | select(.isResolved == false)] | length')
 
     CURRENT_REVIEW_IDS=$(echo "$CURRENT_STATE" | jq '[.reviews.nodes[].id] | sort')
     CURRENT_COMMENT_IDS=$(echo "$CURRENT_STATE" | jq '[.comments.nodes[].id] | sort')
-    CURRENT_THREAD_IDS=$(echo "$CURRENT_STATE" | jq '[.reviewThreads.nodes[].id] | sort')
+    CURRENT_THREAD_IDS=$(echo "$CURRENT_THREADS" | jq '[.[].id] | sort')
 
     # Check for new review threads (inline code comments)
     if [[ "$CURRENT_THREAD_IDS" != "$INITIAL_THREAD_IDS" ]]; then
@@ -235,12 +308,12 @@ while true; do
         if [[ "$NEW_THREAD_COUNT" -gt 0 ]]; then
             echo "THREAD_RECEIVED"
             # Get details of new threads
-            echo "$CURRENT_STATE" | jq --argjson new_ids "$NEW_THREAD_IDS" '{
+            echo "$CURRENT_THREADS" | jq --argjson new_ids "$NEW_THREAD_IDS" '{
                 status: "thread_received",
                 new_thread_count: ($new_ids | length),
-                new_threads: [.reviewThreads.nodes[] | select(.id as $id | $new_ids | contains([$id]))],
-                total_threads: (.reviewThreads.nodes | length),
-                unresolved_threads: ([.reviewThreads.nodes[] | select(.isResolved == false)] | length)
+                new_threads: [.[] | select(.id as $id | $new_ids | contains([$id]))],
+                total_threads: (length),
+                unresolved_threads: ([.[] | select(.isResolved == false)] | length)
             }'
             exit 0
         fi

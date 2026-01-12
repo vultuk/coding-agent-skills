@@ -21,6 +21,8 @@ arguments:
 
 Gather all PR feedback (review comments + CI failures), plan holistically, then execute.
 
+**Codex note:** This skill references Claude Code subagents (`Task(...)`). In Codex, run the equivalent steps with tool calls (for example `functions.shell_command` and `multi_tool_use.parallel`) or run them sequentially. See [`../../COMPATIBILITY.md`](../../COMPATIBILITY.md).
+
 ## Phase 1: Gather Context
 
 Run the script to collect all feedback:

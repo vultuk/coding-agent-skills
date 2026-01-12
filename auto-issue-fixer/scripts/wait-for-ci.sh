@@ -79,6 +79,11 @@ if ! command -v gh &> /dev/null; then
     exit 1
 fi
 
+if ! gh auth status &> /dev/null; then
+    error "gh is not authenticated. Run: gh auth login"
+    exit 1
+fi
+
 if ! command -v jq &> /dev/null; then
     error "jq is not installed"
     exit 1
