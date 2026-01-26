@@ -3,21 +3,26 @@ name: auto-issue-fixer
 description: Automate the complete GitHub issue lifecycle. Fetches all issues, prioritizes by importance and execution speed, implements fixes using TDD, creates PRs, monitors for reviews, handles feedback autonomously, and notifies when complete. Uses extensive subagent parallelization for context efficiency.
 triggers:
   - "auto fix issues"
+  - "auto fix issue"
   - "process github issues"
   - "fix next issue"
   - "run auto issue fixer"
   - "automate issue fixing"
+  - "auto fix issue #"
 prerequisites:
   - gh (GitHub CLI, authenticated)
   - git
   - jq (for JSON parsing)
 arguments:
+  - name: ISSUE_NUMBER
+    required: false
+    description: Specific issue number to fix (skips discovery/prioritization phase)
   - name: MAX_ISSUES
     required: false
-    description: Maximum number of issues to process in one run (default 1)
+    description: Maximum number of issues to process in one run (default 1, ignored if ISSUE_NUMBER is set)
   - name: LABELS
     required: false
-    description: Filter issues by labels (comma-separated)
+    description: Filter issues by labels (comma-separated, ignored if ISSUE_NUMBER is set)
   - name: EXCLUDE_LABELS
     required: false
     description: Exclude issues with these labels (comma-separated)
@@ -61,6 +66,33 @@ This skill runs completely autonomously:
 
 ---
 
+## Single Issue Mode
+
+When `ISSUE_NUMBER` is provided, the skill skips the discovery and prioritization phases and directly processes the specified issue:
+
+```bash
+# Example: Fix only issue #1198
+/auto-issue-fixer --issue-number 1198
+
+# Or use the dedicated command
+/fix-issue 1198
+```
+
+**Behavior changes in single issue mode:**
+- Phase 1 (Issue Discovery and Prioritization) is **skipped entirely**
+- The specified issue is loaded directly
+- `MAX_ISSUES` and `LABELS` arguments are ignored
+- All other phases (Setup, TDD Implementation, PR, Feedback Loop, Completion) run normally
+
+**Status message for single issue mode:**
+```
+================================================================================
+AUTO-ISSUE-FIXER: STARTING - Processing specified issue #1198
+================================================================================
+```
+
+---
+
 ## Status Output
 
 **IMPORTANT**: Output clear status messages at each stage so the user can follow progress. Use this format:
@@ -99,6 +131,8 @@ Output these messages at each stage:
 ---
 
 ## Phase 1: Issue Discovery and Prioritization
+
+> **Note**: This phase is skipped entirely when `ISSUE_NUMBER` is provided. Jump directly to Phase 2 with the specified issue.
 
 ### 1.1 Fetch All Issues
 
@@ -1150,6 +1184,12 @@ Escalation message:
 ## Quick Start
 
 ```bash
+# Fix a specific issue by number
+/auto-issue-fixer --issue-number 1198
+
+# Or use the dedicated slash command
+/fix-issue 1198
+
 # Fix the highest-priority issue (leaves PR for human to merge)
 /auto-issue-fixer
 
@@ -1167,6 +1207,9 @@ Escalation message:
 
 # Fully autonomous with custom wait times
 /auto-issue-fixer --auto-merge --bot-wait-minutes 7 --quiet-period-minutes 5
+
+# Fix specific issue with auto-merge
+/fix-issue 1198 --auto-merge
 ```
 
 **Auto-merge behavior:**
